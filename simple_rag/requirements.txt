@@ -1,0 +1,8 @@
+numpy>=1.26.4
+pandas>=2.2.2
+openpyxl>=3.1.2
+rank-bm25>=0.2.2
+faiss-cpu>=1.8.0
+pyyaml>=6.0.1
+requests>=2.31.0
+pytest>=8.2.2

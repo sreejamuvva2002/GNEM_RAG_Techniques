@@ -1,0 +1,49 @@
+paths:
+  input_data: data/GNEM_final_data.xlsx
+  questions: data/questions.xlsx
+  output: output/contexts.xlsx
+  index_dir: .cache/
+
+data:
+  sheet_name: Sheet1
+  # Columns to use; trailing empty columns in the file are ignored.
+  text_columns:
+    - Company
+    - Category
+    - Industry Group
+    - Updated Location
+    - Address
+    - Latitude
+    - Longitude
+    - Primary Facility Type
+    - EV Supply Chain Role
+    - Primary OEMs
+    - Supplier or Affiliation Type
+    - Employment
+    - Product / Service
+    - EV / Battery Relevant
+    - Classification Method
+
+chunking:
+  # Field groupings for child chunks. Configurable, not hardcoded.
+  child_groups:
+    identity:     [Company, Category, Industry Group, Supplier or Affiliation Type]
+    location:     [Updated Location, Address, Latitude, Longitude, Primary Facility Type]
+    supply_chain: [EV Supply Chain Role, Primary OEMs, EV / Battery Relevant, Classification Method]
+    business:     [Employment, Product / Service]
+
+embedding:
+  provider: nomic_ollama
+  model: nomic-embed-text
+  ollama_host: http://localhost:11434
+  batch_size: 32
+  request_timeout_seconds: 60
+
+retrieval:
+  top_k: 60
+  semantic_weight: 0.6        # alpha — vector contribution
+  keyword_weight: 0.4         # 1 - alpha — BM25 contribution
+  candidate_pool_size: 200
+
+logging:
+  level: INFO
