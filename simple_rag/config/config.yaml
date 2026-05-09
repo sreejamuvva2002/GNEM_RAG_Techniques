@@ -1,12 +1,16 @@
 paths:
   input_data: data/GNEM_final_data.xlsx
   questions: data/questions.xlsx
+  questions_csv: data/questions.csv
   output: output/contexts.xlsx
-  index_dir: .cache/
+  index_dir: .cache/chroma_db
+  chunks_output: output/chunks.xlsx
+  embeddings_output: output/embeddings.xlsx
+  retrieved_contexts: outputs/retrieved_contexts/retrieved_contexts.xlsx
+  generated_answers: outputs/generated_answers/generated_answers.xlsx
 
 data:
   sheet_name: Sheet1
-  # Columns to use; trailing empty columns in the file are ignored.
   text_columns:
     - Company
     - Category
@@ -25,12 +29,47 @@ data:
     - Classification Method
 
 chunking:
-  # Field groupings for child chunks. Configurable, not hardcoded.
-  child_groups:
-    identity:     [Company, Category, Industry Group, Supplier or Affiliation Type]
-    location:     [Updated Location, Address, Latitude, Longitude, Primary Facility Type]
-    supply_chain: [EV Supply Chain Role, Primary OEMs, EV / Battery Relevant, Classification Method]
-    business:     [Employment, Product / Service]
+  chunk_id_prefix: "GA_AUTO"
+  state: "Georgia"
+
+  # Source column mappings for metadata derivation.
+  field_mappings:
+    company: Company
+    category: Category
+    industry_group: "Industry Group"
+    location: "Updated Location"
+    address: Address
+    latitude: Latitude
+    longitude: Longitude
+    facility_type: "Primary Facility Type"
+    ev_supply_chain_role: "EV Supply Chain Role"
+    primary_oems: "Primary OEMs"
+    supplier_type: "Supplier or Affiliation Type"
+    employment: Employment
+    product_service: "Product / Service"
+    ev_relevant: "EV / Battery Relevant"
+    classification_method: "Classification Method"
+
+  # Markers and indicators for metadata derivation.
+  announcement_marker: "*"
+  oem_categories:
+    - "OEM"
+    - "OEM Supply Chain"
+    - "OEM (Footprint)"
+    - "OEM Footprint"
+
+  # Template lines for Embedding_Text.  Placeholders use {field_name} syntax.
+  # Available placeholders: Company, County, Employment, Industry_Name,
+  # Tier_Level, Tier_Confidence, Product_Service, OEM_Status, Status
+  embedding_text_template:
+    - "Company: {Company}"
+    - "Location: {County}, {State}"
+    - "Employment: {Employment} employees"
+    - "Industry: {Industry_Name}"
+    - "Supply Chain Tier: {Tier_Level} ({Tier_Confidence})"
+    - "Product/Service: {Product_Service}"
+    - "OEM Status: {OEM_Status}"
+    - "Status: {Status}"
 
 embedding:
   provider: nomic_ollama
@@ -39,11 +78,40 @@ embedding:
   batch_size: 32
   request_timeout_seconds: 60
 
+vector_store:
+  provider: chroma
+  collection_name: gnem_chunks
+  distance_metric: cosine
+  upsert_batch_size: 500
+
 retrieval:
-  top_k: 60
-  semantic_weight: 0.6        # alpha — vector contribution
-  keyword_weight: 0.4         # 1 - alpha — BM25 contribution
-  candidate_pool_size: 200
+  top_k: 80
+  semantic_weight: 0.6
+  keyword_weight: 0.4
+  candidate_pool_size: 250
+  # Fusion modes to run and compare. Each mode produces its own Excel sheet.
+  # "dense"  = vector (semantic) search only
+  # "sparse" = BM25 keyword search only
+  # "hybrid" = weighted combination of dense + sparse
+  fusion_modes:
+    - dense
+    - sparse
+    - hybrid
+
+# LLM configuration for answer generation (Stage 2).
+# Values are read from environment variables first; these are defaults.
+llm:
+  base_url_env: LLM_BASE_URL
+  api_key_env: LLM_API_KEY
+  model_env: LLM_MODEL
+  defaults:
+    base_url: http://localhost:11434/v1
+    api_key: ollama
+    model: gemma3:27b
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 120
 
 logging:
   level: INFO
+

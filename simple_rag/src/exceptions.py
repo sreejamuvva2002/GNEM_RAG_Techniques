@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Custom exception hierarchy for the Simple RAG pipeline.
 
 All domain-specific exceptions inherit from ``SimpleRAGError`` so callers

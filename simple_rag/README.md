@@ -1,6 +1,6 @@
 # Simple RAG — Retrieval-Augmented Generation for GNEM Data
 
-A production-grade **Simple RAG (Retrieval-Augmented Generation)** pipeline that retrieves contextually relevant company records from the Georgia New Energy Mobility (GNEM) dataset using **hybrid retrieval** — combining dense semantic search (FAISS + Nomic Embed Text) with sparse keyword search (BM25). The project follows **layered architecture**, **SOLID principles**, and the **adapter pattern** so that every external integration can be swapped with zero changes to core logic.
+A production-grade **Simple RAG (Retrieval-Augmented Generation)** pipeline that retrieves contextually relevant company records from the Georgia New Energy Mobility (GNEM) dataset using **hybrid retrieval** — combining dense semantic search (ChromaDB + Nomic Embed Text) with sparse keyword search (BM25). The project follows **layered architecture**, **SOLID principles**, and the **adapter pattern** so that every external integration can be swapped with zero changes to core logic.
 
 ---
 
@@ -35,7 +35,7 @@ graph TD
 
     subgraph Adapters
         NOMIC["NomicOllamaEmbeddingAdapter"]
-        FAISS["FAISSVectorStoreAdapter"]
+        CHROMA["ChromaVectorStoreAdapter"]
         BM25["BM25KeywordSearchAdapter"]
         EXCEL_L["ExcelDataLoaderAdapter"]
         EXCEL_W["ExcelResultWriterAdapter"]
@@ -56,7 +56,7 @@ graph TD
     HYBRID -.->|depends on| KSI
 
     NOMIC -->|implements| EI
-    FAISS -->|implements| VSI
+    CHROMA -->|implements| VSI
     BM25 -->|implements| KSI
     EXCEL_L -->|implements| DLI
     EXCEL_W -->|implements| RWI
@@ -79,8 +79,8 @@ flowchart TD
     VEC_NORM --> COMBINE
 
     COMBINE --> RANK[Rank documents by combined score]
-    RANK --> DEDUP["Deduplicate by parent_id<br/>(keep best-scoring child per parent)"]
-    DEDUP --> TOPK["Return top K parent documents"]
+    RANK --> DEDUP["Deduplicate by record_id<br/>(keep best-scoring chunk per company)"]
+    DEDUP --> TOPK["Return top K company records"]
     TOPK --> END_NODE([End])
 ```
 
@@ -100,7 +100,10 @@ simple_rag/
 │   └── questions.xlsx                 # 50 questions (user-provided)
 ├── output/
 │   ├── .gitkeep                       # Placeholder for git
-│   └── contexts.xlsx                  # Pipeline output (generated)
+│   ├── contexts.xlsx                  # Pipeline output (generated)
+│   ├── chunks.xlsx                    # All chunks with metadata (generated)
+│   ├── embeddings.xlsx                # Full 768-dim embeddings (generated)
+│   └── embeddings_2d_pca.xlsx         # 2-D PCA projection (generated)
 ├── src/
 │   ├── __init__.py
 │   ├── exceptions.py                  # Custom exception hierarchy
@@ -112,19 +115,21 @@ simple_rag/
 │   │   └── result_writer_interface.py
 │   ├── adapters/                      # Concrete external integrations
 │   │   ├── nomic_ollama_embedding_adapter.py
-│   │   ├── faiss_vector_store_adapter.py
+│   │   ├── chroma_vector_store_adapter.py
+│   │   ├── faiss_vector_store_adapter.py   # Kept for adapter-swap flexibility
 │   │   ├── bm25_keyword_search_adapter.py
 │   │   ├── excel_data_loader_adapter.py
 │   │   └── excel_result_writer_adapter.py
 │   ├── core/                          # Pure domain logic (no I/O)
-│   │   ├── parent_child_chunker.py    # Row → parent + field-grouped children
+│   │   ├── parent_child_chunker.py    # Row → chunk with rich metadata
 │   │   ├── hybrid_retriever.py        # Orchestrates the retrieval flow
 │   │   └── score_fusion.py            # Min-max norm + invert + weighted sum
 │   ├── services/                      # Orchestration use-cases
-│   │   ├── ingestion_service.py       # load → chunk → embed → index
+│   │   ├── ingestion_service.py       # load → chunk → embed → index → export
 │   │   └── rag_service.py             # query → retrieve → write output
 │   └── utils/
 │       ├── config_loader.py           # YAML config loading + validation
+│       ├── embedding_exporter.py      # Export & visualise embeddings
 │       └── logger.py                  # Centralised logging configuration
 └── tests/
     ├── test_chunker.py                # Parent-child chunker tests
@@ -139,7 +144,7 @@ simple_rag/
 | Component | Library | Version |
 |---|---|---|
 | Dense embeddings | `nomic-embed-text` via Ollama | — |
-| Vector store | `faiss-cpu` | 1.8.0 |
+| Vector store | `chromadb` | 0.5.0+ |
 | Keyword search | `rank-bm25` | 0.2.2 |
 | Data handling | `pandas` + `openpyxl` | 2.2.2 / 3.1.2 |
 | Configuration | `pyyaml` | 6.0.1 |
@@ -148,7 +153,7 @@ simple_rag/
 | Testing | `pytest` | 8.2.2 |
 | Python | 3.10+ | — |
 
-**Why FAISS?** FAISS is chosen for simplicity and zero-server overhead. It runs entirely in-process — no separate database server to install, configure, or manage. For the ~5,000 child chunks in this dataset, exact nearest-neighbour search with `IndexFlatL2` is fast enough and avoids the complexity of approximate indices.
+**Why ChromaDB?** ChromaDB is a lightweight, open-source embedding database that stores vectors alongside metadata with built-in persistence. Unlike FAISS, it natively supports metadata filtering, cosine/L2/IP distance metrics, and allows direct retrieval of stored embeddings — making it easy to inspect, export, and visualise vectors.
 
 ---
 
@@ -241,13 +246,88 @@ python main.py
 
 **Pipeline stages:**
 1. Load configuration from `config/config.yaml`.
-2. Load GNEM data → chunk into parent + child records.
-3. Embed child chunks via Ollama (`nomic-embed-text`).
-4. Build FAISS vector index + BM25 keyword index.
-5. Query all 50 questions through the hybrid retrieval flow.
-6. Write results to `output/contexts.xlsx`.
+2. Load GNEM data → chunk into structured records with rich metadata.
+3. Export all chunks to `output/chunks.xlsx`.
+4. Embed chunks via Ollama (`nomic-embed-text`).
+5. Index in ChromaDB (cosine distance) + BM25 keyword index.
+6. Query all 50 questions through the hybrid retrieval flow.
+7. Write results to `output/contexts.xlsx`.
+8. Export embeddings to `output/embeddings.xlsx` and `output/embeddings_2d_pca.xlsx`.
 
 ---
+
+## Chunk Metadata Schema
+
+Each company row produces one chunk with the following metadata fields:
+
+| Field | Type | RAG Role | Description |
+|---|---|---|---|
+| `Chunk_ID` | string | Chunk Key | Sequential ID (e.g., `GA_AUTO_0000`) |
+| `Record_ID` | string | Primary Key | MD5 hash of company + row index |
+| `Company` | string | Display | Original company name |
+| `Company_Clean` | string | Search/Filter | Name without announcement markers |
+| `County` | string | Filter/Facet | Extracted from location field |
+| `Employment` | integer | Filter/Sort | Number of employees |
+| `Industry_Code` | integer | Filter | Numeric code from Industry Group |
+| `Industry_Name` | string | Display | Industry classification name |
+| `Tier_Level` | string | Filter/Facet | Extracted tier level (1, 2/3, etc.) |
+| `Tier_Confidence` | string | Metadata | Tier confidence (likely/confirmed) |
+| `Is_OEM` | boolean | Filter | Whether company is an OEM |
+| `Is_Announcement` | boolean | Filter | Announced vs operational facility |
+| `EV_Relevant` | string | Filter | EV/Battery relevance level |
+| `Classification_Method` | string | Metadata | How the record was classified |
+| `Embedding_Text` | text | Embedding Input | Formatted text for embedding |
+| `Char_Count` | integer | Stats | Length of embedding text |
+| `Token_Estimate` | integer | Stats | Rough token estimate (chars/4) |
+
+---
+
+## Viewing Embeddings
+
+After running the pipeline, three embedding-related files are generated:
+
+### 1. Full Embeddings (`output/embeddings.xlsx`)
+Contains all 768-dimensional embedding vectors with columns `Chunk_ID`, `Company`, `dim_0` through `dim_767`. Open in Excel or load in Python:
+
+```python
+import pandas as pd
+df = pd.read_excel("output/embeddings.xlsx")
+print(df.shape)  # (205, 770)
+```
+
+### 2. 2D PCA Projection (`output/embeddings_2d_pca.xlsx`)
+A 2D principal component projection ready for scatter plots. Columns: `Chunk_ID`, `PC1`, `PC2`, `Company`, `Tier_Level`, `County`. Visualise with:
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+pca = pd.read_excel("output/embeddings_2d_pca.xlsx")
+plt.figure(figsize=(12, 8))
+for tier in pca["Tier_Level"].unique():
+    subset = pca[pca["Tier_Level"] == tier]
+    plt.scatter(subset["PC1"], subset["PC2"], label=tier, alpha=0.7)
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.legend(title="Tier Level")
+plt.title("GNEM Company Embeddings — PCA Projection")
+plt.tight_layout()
+plt.savefig("output/embeddings_pca_plot.png", dpi=150)
+plt.show()
+```
+
+### 3. Direct from ChromaDB
+You can also retrieve embeddings programmatically:
+
+```python
+import chromadb
+client = chromadb.PersistentClient(path=".cache/chroma_db")
+collection = client.get_collection("gnem_chunks")
+
+# Get all embeddings
+result = collection.get(include=["embeddings", "metadatas"])
+print(f"{len(result['ids'])} vectors × {len(result['embeddings'][0])} dimensions")
+```
 
 ## How to Extend
 
