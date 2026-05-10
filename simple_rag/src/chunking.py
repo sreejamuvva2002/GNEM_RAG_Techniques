@@ -20,6 +20,39 @@ import re
 from typing import Any
 
 
+# Field groups for true parent-child chunking.
+# Each company record is split into these 3 child chunks.
+# Templates use the same placeholder names as the normal embedding_text_template
+# plus EV_Relevant and Primary_OEMs from metadata.
+CHILD_FIELD_GROUPS = [
+    {
+        "name": "identity",
+        "template": (
+            "Company: {Company}\n"
+            "Location: {County}, {State}\n"
+            "Supply Chain Tier: {Tier_Level} ({Tier_Confidence})\n"
+            "Status: {Status}"
+        ),
+    },
+    {
+        "name": "industry",
+        "template": (
+            "Industry: {Industry_Name}\n"
+            "Product/Service: {Product_Service}"
+        ),
+    },
+    {
+        "name": "profile",
+        "template": (
+            "Employment: {Employment} employees\n"
+            "OEM Status: {OEM_Status}\n"
+            "EV Relevant: {EV_Relevant}\n"
+            "Primary OEMs: {Primary_OEMs}"
+        ),
+    },
+]
+
+
 logger = get_logger(__name__)
 
 
@@ -337,3 +370,132 @@ class ParentChildChunker:
             if value == int(value):
                 return str(int(value))
         return str(value).strip()
+
+
+# ------------------------------------------------------------------
+# True parent-child chunker
+# ------------------------------------------------------------------
+
+class TrueParentChildChunker:
+    """Splits each company record into 3 field-group child chunks.
+
+    Child chunks are indexed in ChromaDB and BM25 for retrieval.
+    On retrieval, every child's ``record_id`` maps back to the full
+    parent company record via the returned ``parent_lookup`` dict.
+    The LLM always receives the full parent text — never just the
+    matched child snippet.
+
+    Child grouping:
+      - ``identity``: Company + Location + Tier + Status
+      - ``industry``:  Industry + Product/Service
+      - ``profile``:   Employment + OEM Status + EV Relevance + Primary OEMs
+
+    Args:
+        chunking_config: The ``chunking`` section from ``config.yaml``.
+    """
+
+    _CHILD_ID_PREFIX = "GA_PC"
+
+    def __init__(self, chunking_config: dict[str, Any]) -> None:
+        # Delegate all parent-level chunking to the existing chunker.
+        self._row_chunker = ParentChildChunker(chunking_config)
+        self._state = chunking_config["state"]
+
+    def chunk_rows(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[list[Chunk], dict[str, dict[str, Any]]]:
+        """Split each row into child chunks and build the parent lookup.
+
+        Args:
+            rows: List of row dicts as returned by the data loader.
+
+        Returns:
+            A tuple of:
+            - ``child_chunks``: All child ``Chunk`` objects (up to 3 per row).
+              Each child's ``record_id`` is the parent record's ``record_id``
+              so ``HybridRetriever`` deduplicates by parent correctly.
+            - ``parent_lookup``: ``{record_id: {"text": full_text, "company": ...}}``
+              for passing to ``HybridRetriever``.
+        """
+        parent_chunks = self._row_chunker.chunk_rows(rows)
+
+        parent_lookup: dict[str, dict[str, Any]] = {
+            pc.record_id: {
+                "text": pc.embedding_text,
+                "company": pc.metadata.get("Company_Clean", ""),
+            }
+            for pc in parent_chunks
+        }
+
+        child_chunks: list[Chunk] = []
+        for parent_chunk in parent_chunks:
+            children = self._split_into_children(parent_chunk)
+            child_chunks.extend(children)
+
+        logger.info(
+            "True parent-child: %d parent records → %d child chunks",
+            len(parent_chunks),
+            len(child_chunks),
+        )
+        return child_chunks, parent_lookup
+
+    # -------------------------------------------------------------- #
+    # Internal helpers                                                #
+    # -------------------------------------------------------------- #
+
+    def _split_into_children(self, parent: Chunk) -> list[Chunk]:
+        """Produce up to 3 child chunks from a single parent chunk."""
+        meta = parent.metadata
+
+        # Extract numeric row index from parent chunk_id (e.g. "GA_AUTO_0042" → "0042")
+        idx_match = re.search(r"(\d+)$", parent.chunk_id)
+        idx_str = idx_match.group(1) if idx_match else parent.chunk_id
+
+        extended_vars = {
+            "Company": meta.get("Company_Clean", ""),
+            "County": meta.get("County", ""),
+            "State": self._state,
+            "Tier_Level": meta.get("Tier_Level", ""),
+            "Tier_Confidence": meta.get("Tier_Confidence", ""),
+            "Status": "Announced" if meta.get("Is_Announcement", False) else "Operational",
+            "Industry_Name": meta.get("Industry_Name", ""),
+            "Product_Service": meta.get("Product_Service", ""),
+            "Employment": meta.get("Employment_Formatted", ""),
+            "OEM_Status": "OEM" if meta.get("Is_OEM", False) else "Supplier/Service Provider",
+            "EV_Relevant": meta.get("EV_Relevant", ""),
+            "Primary_OEMs": meta.get("Primary_OEMs", ""),
+        }
+
+        children: list[Chunk] = []
+        for group in CHILD_FIELD_GROUPS:
+            child_text = self._render_child(group["template"], extended_vars)
+            if not child_text.strip():
+                continue
+            child_chunk = Chunk(
+                chunk_id=f"{self._CHILD_ID_PREFIX}_{idx_str}_{group['name']}",
+                record_id=parent.record_id,  # shared with parent → enables dedup
+                metadata={**meta, "child_group": group["name"]},
+                embedding_text=child_text,
+            )
+            children.append(child_chunk)
+
+        return children
+
+    @staticmethod
+    def _render_child(template: str, variables: dict[str, Any]) -> str:
+        """Render a child template, skipping lines whose values are all empty."""
+        lines: list[str] = []
+        for line in template.split("\n"):
+            placeholders = re.findall(r"\{(\w+)\}", line)
+            has_content = any(
+                str(variables.get(p, "")).strip()
+                for p in placeholders
+                if p != "State"
+            )
+            if not has_content:
+                continue
+            try:
+                lines.append(line.format(**variables))
+            except KeyError:
+                continue
+        return "\n".join(lines)

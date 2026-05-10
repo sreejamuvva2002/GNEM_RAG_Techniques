@@ -1,5 +1,117 @@
 # Simple RAG — Retrieval-Augmented Generation for GNEM Data
 
+A research-grade **RAG (Retrieval-Augmented Generation)** pipeline for the Georgia New Energy Mobility (GNEM) dataset, comparing six retrieval configurations across two chunking strategies and three retrieval modes.
+
+---
+
+## Research Workflow — Six Experiments
+
+### Experiment Design
+
+| # | Experiment | Chunking | Retrieval |
+|---|---|---|---|
+| 1 | normal_dense | Normal (row-level) | Dense only (ChromaDB) |
+| 2 | normal_sparse | Normal (row-level) | Sparse only (BM25) |
+| 3 | normal_hybrid | Normal (row-level) | Hybrid (dense + sparse) |
+| 4 | parent_child_dense | Parent-child (field groups) | Dense only (ChromaDB) |
+| 5 | parent_child_sparse | Parent-child (field groups) | Sparse only (BM25) |
+| 6 | parent_child_hybrid | Parent-child (field groups) | Hybrid (dense + sparse) |
+
+### Quick Start
+
+```bash
+cd simple_rag/
+
+# 1. Start Ollama (in a separate terminal)
+ollama serve
+
+# 2. Set environment variables
+export LLM_BASE_URL="http://localhost:11434/v1"
+export LLM_API_KEY="ollama"
+export LLM_MODEL="gemma3:27b"
+
+# 3. Organize existing normal chunking results (already run — step 3 extracts them)
+python scripts/organize_experiments.py
+
+# 4. Run the three new parent-child experiments
+python scripts/run_experiment.py --chunking parent_child --retrieval dense
+python scripts/run_experiment.py --chunking parent_child --retrieval sparse
+python scripts/run_experiment.py --chunking parent_child --retrieval hybrid
+
+# 5. (Optional) Re-run normal chunking experiments — only if you want fresh results
+# python scripts/run_experiment.py --chunking normal --retrieval dense
+# python scripts/run_experiment.py --chunking normal --retrieval sparse
+# python scripts/run_experiment.py --chunking normal --retrieval hybrid
+
+# 6. Evaluate all six experiments
+export RAGAS_LLM_MODEL="gemma3:27b"
+export RAGAS_EMBEDDING_MODEL="nomic-embed-text"
+python scripts/evaluate_all_experiments.py
+```
+
+### Output Structure
+
+```
+outputs/
+├── experiments/
+│   ├── normal_dense/
+│   │   ├── generated_answers.xlsx     # 50 answers
+│   │   ├── retrieved_contexts.xlsx    # up to 4000 context rows (80 per question)
+│   │   └── run_config.json            # all parameters for reproducibility
+│   ├── normal_sparse/
+│   ├── normal_hybrid/
+│   ├── parent_child_dense/
+│   ├── parent_child_sparse/
+│   └── parent_child_hybrid/
+├── evaluation/
+│   ├── ragas_per_question_scores.xlsx  # RAGAS scores per question (6 sheets)
+│   ├── ragas_summary.xlsx              # aggregate means per experiment
+│   ├── answer_correctness_50q.xlsx     # exact/semantic/judge correctness (7 sheets)
+│   ├── final_experiment_comparison.xlsx # full comparison table
+│   └── final_experiment_comparison.md  # narrative report
+└── reports/
+    ├── codebase_audit_report.md
+    ├── audit_followup_action_plan.md
+    ├── experiment_fairness_check.md
+    └── code_mistake_review.md
+```
+
+### Chunking Strategy Details
+
+**Normal chunking** (`--chunking normal`)
+- 1 company record = 1 chunk
+- Full company record text is both indexed and returned to the LLM
+- ChromaDB collection: `gnem_chunks` (~1170 chunks)
+
+**Parent-child chunking** (`--chunking parent_child`)
+- Each company record is split into 3 child chunks by field group:
+  - `identity`: Company + Location + Tier Level + Status
+  - `industry`: Industry + Product/Service
+  - `profile`: Employment + OEM Status + EV Relevance + Primary OEMs
+- Child chunks are indexed in ChromaDB and BM25 for retrieval
+- On retrieval: the best child chunk match is expanded to the FULL parent company record
+- The LLM always receives the full company record, never just the child snippet
+- ChromaDB collection: `gnem_child_chunks` (~3510 child chunks)
+
+### Evaluation Metrics
+
+RAGAS metrics (LLM-as-judge):
+- `faithfulness` — does the answer contradict the retrieved context?
+- `answer_relevancy` — does the answer address the question?
+- `context_precision` — are the retrieved contexts relevant?
+- `context_recall` — do the contexts contain the needed information?
+- `answer_correctness` — does the answer match the golden answer?
+- `factual_correctness` — are the stated facts correct?
+
+Non-RAGAS metrics:
+- `exact_match` — strict string equality with golden answer
+- `normalized_exact_match` — lowercase + punctuation-removed match
+- `semantic_similarity` — cosine similarity of nomic-embed-text embeddings
+- `judge_correctness_score` — LLM judge rating 0.0–1.0 (requires JUDGE_MODEL env var)
+- `missing_answer_flag` — whether answer indicates "not available in context"
+
+---
+
 A production-grade **Simple RAG (Retrieval-Augmented Generation)** pipeline that retrieves contextually relevant company records from the Georgia New Energy Mobility (GNEM) dataset using **hybrid retrieval** — combining dense semantic search (ChromaDB + Nomic Embed Text) with sparse keyword search (BM25). The project follows **layered architecture**, **SOLID principles**, and the **adapter pattern** so that every external integration can be swapped with zero changes to core logic.
 
 ---

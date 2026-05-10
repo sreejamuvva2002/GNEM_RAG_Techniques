@@ -7,7 +7,7 @@ surfaces clear errors when Ollama is unreachable or the model is
 not pulled.
 """
 
-from src.utils import get_logger
+from src.utils import EmbeddingError, OllamaUnavailableError, get_logger
 
 import requests
 

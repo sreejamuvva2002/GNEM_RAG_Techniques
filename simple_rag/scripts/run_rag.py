@@ -14,8 +14,10 @@ Usage:
 
 from __future__ import annotations
 
+import shutil
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -97,7 +99,7 @@ def _run_for_mode(
     questions_df: pd.DataFrame,
     fusion_mode: str,
     logger: Any,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the full RAG pipeline for one fusion mode.
 
     For every question:
@@ -108,6 +110,7 @@ def _run_for_mode(
       5. Return a result row including the exact retrieved context.
     """
     results: list[dict[str, Any]] = []
+    context_rows: list[dict[str, Any]] = []
 
     for _, row in questions_df.iterrows():
         qid = row["question_id"]
@@ -120,7 +123,7 @@ def _run_for_mode(
 
             evidence_list: list[dict[str, Any]] = []
             for i, item in enumerate(retrieved_items):
-                evidence_list.append(
+                evidence = (
                     {
                         "evidence_id": f"E{i + 1:03d}",
                         "company":             item.get("company", ""),
@@ -138,6 +141,16 @@ def _run_for_mode(
                         "similarity_score":    item.get("similarity_score", 0.0),
                         "keyword_score":       item.get("keyword_score", 0.0),
                         "combined_score":      item.get("combined_score", 0.0),
+                    }
+                )
+                evidence_list.append(evidence)
+                context_rows.append(
+                    {
+                        "question_id": qid,
+                        "question": question,
+                        "fusion_mode": fusion_mode,
+                        "evidence_rank": i + 1,
+                        **evidence,
                     }
                 )
 
@@ -189,7 +202,13 @@ def _run_for_mode(
                 }
             )
 
-    return results
+    return results, context_rows
+
+
+def _timestamped_path(path: Path, suffix: str) -> Path:
+    """Return a timestamped sibling path for preserving generated outputs."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return path.with_name(f"{path.stem}_{suffix}_{timestamp}{path.suffix}")
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +301,7 @@ def main() -> None:
             fusion_mode=mode,
         )
 
-        mode_results = _run_for_mode(
+        mode_results, mode_context_rows = _run_for_mode(
             retriever=retriever,
             llm_client=llm_client,
             questions_df=questions_df,
@@ -292,12 +311,20 @@ def main() -> None:
 
         sheet_name = f"RAG_{mode.capitalize()}"
         output_sheets[sheet_name] = pd.DataFrame(mode_results)
+        context_sheet_name = f"Context_{mode.capitalize()}"
+        output_sheets[context_sheet_name] = pd.DataFrame(mode_context_rows)
         logger.info("[%s] Done. %d results.", mode, len(mode_results))
 
     # 7. Save all sheets to a single Excel file
-    output_path = Path(cfg["paths"]["generated_answers"])
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    configured_output_path = Path(cfg["paths"]["generated_answers"])
+    configured_output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if configured_output_path.exists():
+        backup_path = _timestamped_path(configured_output_path, "previous")
+        shutil.copy2(configured_output_path, backup_path)
+        logger.info("Previous generated answers preserved at: %s", backup_path)
+
+    output_path = _timestamped_path(configured_output_path, "current")
     write_multi_sheet_excel(path=str(output_path), sheets=output_sheets)
 
     elapsed = time.time() - start_time

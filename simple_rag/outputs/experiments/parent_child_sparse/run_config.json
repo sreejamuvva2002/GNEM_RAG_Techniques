@@ -1,0 +1,24 @@
+{
+  "experiment_name": "parent_child_sparse",
+  "chunking_type": "parent_child",
+  "retrieval_type": "sparse",
+  "chroma_collection": "gnem_child_chunks",
+  "embedding_model": "nomic-embed-text",
+  "embedding_host": "http://localhost:11434",
+  "llm_model": "gemma3:27b",
+  "llm_temperature": 0.2,
+  "top_k": 80,
+  "candidate_pool_size": 250,
+  "semantic_weight": 0.6,
+  "keyword_weight": 0.4,
+  "sparse_method": "BM25Okapi",
+  "prompt_version": "v1",
+  "num_questions": 50,
+  "num_errors": 0,
+  "elapsed_seconds": 858.5,
+  "run_timestamp": "2026-05-09T17:51:19.818422",
+  "outputs": {
+    "generated_answers": "/home/sm11926/Downloads/GNEM_RAG_Techniques/simple_rag/outputs/experiments/parent_child_sparse/generated_answers.xlsx",
+    "retrieved_contexts": "/home/sm11926/Downloads/GNEM_RAG_Techniques/simple_rag/outputs/experiments/parent_child_sparse/retrieved_contexts.xlsx"
+  }
+}

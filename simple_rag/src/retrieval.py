@@ -5,10 +5,11 @@ This module implements the exact normalisation and combination logic
 described in the architecture specification:
 
 1. **BM25 normalisation** — min-max scaling to [0, 1].  Higher is better.
-2. **Vector normalisation** — convert distances (lower = better) to
-   similarity via ``sim = 1 / (1 + distance)``, then min-max to [0, 1].
-   If the store already returns cosine similarity (higher = better),
-   the inversion step is a no-op but min-max still runs.
+2. **Vector normalisation** — convert cosine distances (lower = better,
+   range [0, 2]) to similarity via ``sim = 1 − distance/2``,
+   then min-max to [0, 1].  If the store already returns cosine
+   similarity (higher = better), the inversion step is a no-op but
+   min-max still runs.
 3. **Weighted combination** —
    ``combined = alpha * vector_norm + (1 - alpha) * bm25_norm``
 
@@ -55,8 +56,9 @@ def normalize_vector_scores(
 ) -> np.ndarray:
     """Invert distances to similarities, then min-max normalise to [0, 1].
 
-    The inversion formula is ``sim = 1 / (1 + distance)`` which maps
-    distance 0 → similarity 1 and large distance → near 0.
+    The inversion formula is ``sim = 1 − distance / 2`` which correctly
+    maps cosine distance (range [0, 2]) to similarity (range [0, 1]):
+    distance 0 → similarity 1, distance 2 → similarity 0.
 
     If the vector store already returns cosine *similarity* (higher is
     better), set ``already_similarity=True`` to skip the inversion —
@@ -79,9 +81,9 @@ def normalize_vector_scores(
         # Still min-max normalise for consistency.
         similarities = distances.astype(np.float64)
     else:
-        # Invert: distance → similarity.
-        # sim = 1 / (1 + distance).  Lower distance → higher similarity.
-        similarities = 1.0 / (1.0 + distances.astype(np.float64))
+        # Invert cosine distance → similarity: sim = 1 - dist/2.
+        # ChromaDB cosine distance ∈ [0, 2] → similarity ∈ [0, 1].
+        similarities = 1.0 - (distances.astype(np.float64) / 2.0)
 
     min_s = similarities.min()
     max_s = similarities.max()
@@ -225,9 +227,13 @@ class HybridRetriever:
         - ``hybrid`` : both → weighted combination of normalised scores.
         """
 
-        # Step 1: Embed the query (needed for dense/hybrid; cheap to skip for sparse
-        # but we call it unconditionally so the interface contract stays simple).
-        query_embedding = self._embedding.embed_query(query)
+        # Step 1: Embed the query only when needed (dense/hybrid).
+        # Sparse mode uses BM25 exclusively; embedding call is skipped.
+        query_embedding = (
+            self._embedding.embed_query(query)
+            if self._fusion_mode in ("dense", "hybrid")
+            else None
+        )
 
         # Step 2: Fetch candidates according to the fusion mode.
         candidates: dict[str, dict[str, Any]] = {}
