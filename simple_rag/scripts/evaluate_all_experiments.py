@@ -582,7 +582,7 @@ def _build_comparison_md(
         numeric = pd.to_numeric(summary_df[metric_col], errors="coerce")
         if numeric.notna().any():
             best_idx = numeric.idxmax()
-            best = summary_df.iloc[best_idx]
+            best = summary_df.loc[best_idx]
             lines.append(f"## Best Overall Experiment (by answer_correctness)")
             lines.append(f"")
             lines.append(f"**{best['experiment_name']}**")
@@ -596,7 +596,7 @@ def _build_comparison_md(
     if not normal_rows.empty and metric_col in normal_rows.columns:
         numeric = pd.to_numeric(normal_rows[metric_col], errors="coerce")
         if numeric.notna().any():
-            best_normal = normal_rows.iloc[numeric.idxmax()]
+            best_normal = normal_rows.loc[numeric.idxmax()]
             lines.append(f"**{best_normal['experiment_name']}** (retrieval: {best_normal.get('retrieval_type', 'N/A')})")
     else:
         lines.append("_Not yet available — run all experiments first._")
@@ -607,7 +607,7 @@ def _build_comparison_md(
     if not pc_rows.empty and metric_col in pc_rows.columns:
         numeric = pd.to_numeric(pc_rows[metric_col], errors="coerce")
         if numeric.notna().any():
-            best_pc = pc_rows.iloc[numeric.idxmax()]
+            best_pc = pc_rows.loc[numeric.idxmax()]
             lines.append(f"**{best_pc['experiment_name']}** (retrieval: {best_pc.get('retrieval_type', 'N/A')})")
     else:
         lines.append("_Not yet available — parent-child experiments pending._")
