@@ -44,7 +44,7 @@ python scripts/run_experiment.py --chunking parent_child --retrieval hybrid
 # python scripts/run_experiment.py --chunking normal --retrieval hybrid
 
 # 6. Evaluate all six experiments
-export RAGAS_LLM_MODEL="gemma3:27b"
+export RAGAS_LLM_MODEL="qwen2.5:14b"
 export RAGAS_EMBEDDING_MODEL="nomic-embed-text"
 python scripts/evaluate_all_experiments.py
 ```
@@ -506,7 +506,7 @@ Min-max scaling to [0, 1]. Higher is better. When all scores are equal, returns 
 similarity = 1 / (1 + distance)       # Invert distance → similarity
 vector_norm = (sim - min) / (max - min)  # Min-max to [0, 1]
 ```
-FAISS returns L2 distances (lower = better). The inversion maps distance 0 → similarity 1.0 and large distances → near 0. The subsequent min-max ensures the output range is [0, 1].
+ChromaDB (when configured for L2) returns L2 distances (lower = better). The inversion maps distance 0 → similarity 1.0 and large distances → near 0. The subsequent min-max ensures the output range is [0, 1].
 
 If a store already returns cosine similarity (higher = better), the inversion step is a no-op — set `already_similarity=True` — but min-max normalisation still runs.
 
@@ -523,10 +523,9 @@ After ranking by combined score, the pipeline deduplicates by `parent_id`, keepi
 
 ## Limitations & Future Work
 
-- **No LLM generation step** — This pipeline retrieves relevant context but does not generate answers. Adding an LLM generation step (e.g., via Ollama's chat endpoint) would complete the RAG loop.
 - **Simple tokenisation** — BM25 uses whitespace tokenisation. A production system might benefit from stemming, lemmatisation, or domain-specific tokenisation.
 - **No incremental indexing** — The pipeline rebuilds the full index on every run. For large datasets, incremental updates would be more efficient.
 - **Single embedding model** — Only `nomic-embed-text` is supported. The adapter pattern makes adding alternatives straightforward.
 - **No query expansion** — Questions are embedded as-is. Techniques like HyDE or query decomposition could improve recall.
 - **No reranking** — A cross-encoder reranker after initial retrieval could improve precision.
-- **Cache invalidation** — The FAISS index is saved to `.cache/` but there's no check for data staleness. If the source data changes, delete `.cache/` and re-run.
+- **Cache invalidation** — The ChromaDB index is saved to `.cache/chroma_db/` but there's no check for data staleness. If the source data changes, delete the cache and re-run.
